@@ -1,0 +1,36 @@
+# config.yaml
+defaults:
+  - _self_
+
+model_name: qtransformer
+mode: train
+use_wandb: True
+
+model_config:
+  state_dim: 39
+  num_actions: 4  
+  action_bins: 256
+  depth: 1
+  heads: 8
+  dim_head: 64
+  cond_drop_prob: 0.2
+  dueling: True
+
+training_config: 
+    dataset: data/door-open-v2.npz
+    save_model: True
+    num_train_steps: 50000
+    learning_rate: 3e-4
+    batch_size: 1
+    grad_accum_every: 16
+    binary_rewards: True
+    test: True
+    test_every: 500
+        
+test_config: 
+    env_name: door-open-v2
+    load_model: False
+    render: True
+    num_episodes: 5
+    max_num_steps_per_episode: 500
+        
