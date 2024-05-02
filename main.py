@@ -67,8 +67,6 @@ class Pipeline:
         if self.config["training_config"]["save_model"]:
             torch.save(self.model.state_dict(), self.config["model_name"] + ".pth")
 
-        wandb.finish()
-
 
     def setup_agent(self):
         config = self.config["test_config"]
@@ -109,6 +107,8 @@ class Pipeline:
         else:
             self.train_model()
             self.test_model()
+        
+        wandb.finish()
 
 
 if __name__ == "__main__":

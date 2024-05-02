@@ -93,7 +93,7 @@ class QLearner(Module):
         accelerator: Optional[Accelerator] = None,
         accelerator_kwargs: dict = dict(),
         dataloader_kwargs: dict = dict(
-            shuffle = True
+            shuffle = False
         ),
         q_target_ema_kwargs: dict = dict(
             beta = 0.99,
@@ -464,6 +464,7 @@ class QLearner(Module):
         # next take care of the very last action, which incorporates the rewards
 
         q_target_last_action = rewards.squeeze() + γ * q_next[0]
+        #q_pred_last_action = rewards.squeeze() + γ * q_pred_last_action
 
         losses_last_action = F.mse_loss(q_pred_last_action, q_target_last_action, reduction = 'none')
 
@@ -481,6 +482,9 @@ class QLearner(Module):
     ):
         states, actions, next_state, rewards, dones = args
 
+        scaled_tensor = (actions + 1) / 2 * 256
+        actions = scaled_tensor.floor().to(torch.int)
+
         # q-learn kwargs
 
         q_learn_kwargs = dict(
@@ -493,15 +497,15 @@ class QLearner(Module):
         # 3. single action - n-steps
 
         if self.is_multiple_actions:
-            td_loss, q_intermediates = self.autoregressive_q_learn_handle_single_timestep(*args, **q_learn_kwargs)
+            td_loss, q_intermediates = self.autoregressive_q_learn_handle_single_timestep(states, actions, next_state, rewards, dones, **q_learn_kwargs)
             num_timesteps = actions.shape[1]
 
         elif self.n_step_q_learning:
-            td_loss, q_intermediates = self.n_step_q_learn(*args, **q_learn_kwargs)
+            td_loss, q_intermediates = self.n_step_q_learn(states, actions, next_state, rewards, dones, **q_learn_kwargs)
             num_timesteps = actions.shape[1]
 
         else:
-            td_loss, q_intermediates = self.q_learn(*args, **q_learn_kwargs)
+            td_loss, q_intermediates = self.q_learn(states, actions, next_state, rewards, dones, **q_learn_kwargs)
             num_timesteps = 1
 
         if not self.has_conservative_reg_loss:

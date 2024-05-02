@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 model_name: qtransformer
-mode: train
+mode: both
 use_wandb: True
 
 model_config:
@@ -18,13 +18,13 @@ model_config:
 
 training_config: 
     dataset: data/door-open-v2.npz
-    save_model: True
-    num_train_steps: 50000
+    save_model: False
+    num_train_steps: 200
     learning_rate: 3e-4
     batch_size: 1
     grad_accum_every: 16
     binary_rewards: True
-    test: True
+    test: False
     test_every: 500
         
 test_config: 
