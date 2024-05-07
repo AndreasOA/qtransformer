@@ -757,58 +757,7 @@ class DuelingHead(Module):
 
 # Q head modules, for either single or multiple actions
 
-class QHeadSingleAction(Module):
-    def __init__(
-        self,
-        dim,
-        *,
-        num_learned_tokens = 8,
-        action_bins = 256,
-        dueling = False
-    ):
-        super().__init__()
-        self.action_bins = action_bins
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if dueling:
-            self.to_q_values = nn.Sequential(
-                Reduce('b (f n) d -> b d', 'mean', n = num_learned_tokens),
-                DuelingHead(
-                    dim,
-                    action_bins = action_bins
-                )
-            )
-        else:
-            self.to_q_values = nn.Sequential(
-                Reduce('b (f n) d -> b d', 'mean', n = num_learned_tokens),
-                RMSNorm(dim),
-                nn.Linear(dim, action_bins),
-                nn.Sigmoid()
-            )
-
-    def get_random_actions(self, batch_size):
-        return torch.randint(0, self.action_bins, (batch_size,), device = self.device)
-
-    def get_optimal_actions(
-        self,
-        encoded_state,
-        return_q_values = False,
-        actions = None,
-        **kwargs
-    ):
-        assert not exists(actions), 'single actions will never receive previous actions'
-
-        q_values = self.forward(encoded_state)
-
-        max_q, action_indices = q_values.max(dim = -1)
-
-        if not return_q_values:
-            return action_indices
-
-        return action_indices, max_q
-
-    def forward(self, encoded_state):
-        return self.to_q_values(encoded_state)
 
 class QHeadMultipleActions(Module):
     def __init__(
@@ -978,6 +927,20 @@ class QHeadMultipleActions(Module):
 
 # Robotic Transformer
 
+class MLPwithEmbedding(nn.Module):
+    def __init__(self, state_dim, attend_dim, hidden_dim):
+        super().__init__()
+        # MLP layers
+        self.fc1 = nn.Linear(state_dim, hidden_dim)  # First fully connected layer
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_dim, attend_dim)  # Output layer with the same dimension as input
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))  # Activation function after first fully connected layer
+        x = self.fc2(x)          # Output layer, could add activation if needed
+        return x
+
+
 class QRoboticTransformer(Module):
 
     @beartype
@@ -1020,7 +983,7 @@ class QRoboticTransformer(Module):
         attend_dim = action_bins*2
 
         # Embedding
-        self.embedding_layer = nn.Linear(state_dim, attend_dim)
+        self.embedding_layer = MLPwithEmbedding(state_dim, attend_dim, 512)
         # Transformer
         self.transformer_depth = depth
         self.transformer = Transformer(
@@ -1035,23 +998,13 @@ class QRoboticTransformer(Module):
 
         self.cond_drop_prob = cond_drop_prob
 
-        # Q head
-
-        if self.is_single_action:
-            self.q_head = QHeadSingleAction(
-                attend_dim,
-                num_learned_tokens = self.num_learned_tokens,
-                action_bins = action_bins,
-                dueling = dueling
-            )
-        else:
-            self.q_head = QHeadMultipleActions(
-                attend_dim,
-                action_bins = action_bins,
-                dueling = dueling,
-                weight_tie_action_bin_embed = weight_tie_action_bin_embed,
-                **q_head_attn_kwargs
-            )
+        self.q_head = QHeadMultipleActions(
+            attend_dim,
+            action_bins = action_bins,
+            dueling = dueling,
+            weight_tie_action_bin_embed = weight_tie_action_bin_embed,
+            **q_head_attn_kwargs
+        )
 
     def get_random_actions(self, batch_size = 1):
         return self.q_head.get_random_actions(batch_size)
@@ -1077,8 +1030,8 @@ class QRoboticTransformer(Module):
         batch_size = state.shape[0]
         assert 0. <= prob_random_action <= 1.
 
-        if random() < prob_random_action:
-            return self.get_random_actions(batch_size = batch_size)
+        #if random() < prob_random_action:
+        #    return self.get_random_actions(batch_size = batch_size)
 
         return self.get_optimal_actions(state, *args, **kwargs)
 
@@ -1088,7 +1041,10 @@ class QRoboticTransformer(Module):
     ):
         if state.ndim < 3:
             state = state.unsqueeze(0)
-        return self.embedding_layer(state)
+
+        state = self.embedding_layer(state)
+
+        return state
 
     @classifier_free_guidance
     def forward(

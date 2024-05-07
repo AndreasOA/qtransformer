@@ -151,41 +151,8 @@ class Agent(Module):
 
         assert hasattr(environment, 'state_shape')
 
-        assert 0. <= epsilon_start <= 1.
-        assert 0. <= epsilon_end <= 1.
-        assert epsilon_start >= epsilon_end
-
-        self.epsilon_start = epsilon_start
-        self.epsilon_end = epsilon_end
-        self.num_steps_to_target_epsilon = num_steps_to_target_epsilon
-        self.epsilon_slope = (epsilon_end - epsilon_start) / num_steps_to_target_epsilon
-
         self.num_episodes = num_episodes
         self.max_num_steps_per_episode = max_num_steps_per_episode
-
-
-        # states_path = mem_path / STATES_FILENAME
-        #actions_path = "actions.npz"
-        # rewards_path = mem_path / REWARDS_FILENAME
-        # dones_path = mem_path / DONES_FILENAME
-
-        prec_shape = (num_episodes, max_num_steps_per_episode)
-        num_actions = q_transformer.num_actions
-        state_shape = environment.state_shape
-
-        # if condition_on_text:
-        #     text_embeds_path = mem_path / TEXT_EMBEDS_FILENAME
-        #     text_embed_shape = environment.text_embed_shape
-        #     self.text_embed_shape = text_embed_shape
-        #     self.text_embeds = open_memmap(str(text_embeds_path), dtype = 'float32', mode = 'w+', shape = (*prec_shape, *text_embed_shape))
-
-        # self.states      = open_memmap(str(states_path), dtype = 'float32', mode = 'w+', shape = (*prec_shape, *state_shape))
-        #self.actions     = open_memmap(str(actions_path), dtype = 'float32', mode = 'w+', shape = (*prec_shape, num_actions))
-        # self.rewards     = open_memmap(str(rewards_path), dtype = 'float32', mode = 'w+', shape = prec_shape)
-        # self.dones       = open_memmap(str(dones_path), dtype = 'bool', mode = 'w+', shape = prec_shape)
-
-    def get_epsilon(self, step):
-        return max(self.epsilon_end, self.epsilon_slope * float(step) + self.epsilon_start)
 
     @beartype
     @torch.no_grad()
@@ -205,53 +172,19 @@ class Agent(Module):
 
                 actions = self.q_transformer.get_actions(
                     rearrange(curr_state, '... -> 1 ...'),
-                    prob_random_action = 0.0 #epsilon
                 )
                 actions = (actions / 128) -1
                 reward, next_state, done = self.environment(actions)
+                print(actions)
                 if reward > 9:
                     reward_one_cnt +=1
 
-               
-
                 done = done | last_step
-
-                # store memories using memmap, for later reflection and learning
-
-                # if self.condition_on_text:
-                #     assert text_embed.shape[1:] == self.text_embed_shape
-                #     self.text_embeds[episode, step] = text_embed.cpu().numpy()
-
-                # self.states[episode, step]      = curr_state.cpu().numpy()
-                #self.actions[episode, step]     = actions.cpu().numpy()
-                # self.rewards[episode, step]     = reward.cpu().numpy()
-                # self.dones[episode, step]       = done.cpu().numpy()
-
-                # if done, move onto next episode
 
                 if done:
                     break
 
-                # set next state
-
                 curr_state = next_state
-
-            # if self.condition_on_text:
-            #     self.text_embeds.flush()
-
-            # self.states.flush()
-            #self.actions.flush()
-            # self.rewards.flush()
-            # self.dones.flush()
 
             wandb.log({"episode": episode, "target_achieved_agent": reward_one_cnt,"done_agent": int(done), "last_step_agent": int(last_step)})
 
-        # close memmap
-
-        # if self.condition_on_text:
-        #     del self.text_embeds
-
-        # del self.states
-        #del self.actions
-        # del self.rewards
-        # del self.dones

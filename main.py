@@ -75,6 +75,7 @@ class Pipeline:
             self.model.to(self.device)
 
         self.model.eval()
+        self.model.embedding_layer.eval()
         
         env = MetaworldEnvironment(
             env_name = config["env_name"],

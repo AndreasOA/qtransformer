@@ -17,18 +17,18 @@ model_config:
   dueling: True
 
 training_config: 
-    dataset: data/door-open-v2.npz
-    save_model: False
-    num_train_steps: 200
-    learning_rate: 3e-4
+    dataset: data/box-close-v2.npz
+    save_model: True
+    num_train_steps: 400
+    learning_rate: 7e-4
     batch_size: 1
     grad_accum_every: 16
-    binary_rewards: True
+    binary_rewards: False
     test: False
     test_every: 500
         
 test_config: 
-    env_name: door-open-v2
+    env_name: box-close-v2
     load_model: False
     render: True
     num_episodes: 5

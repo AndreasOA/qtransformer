@@ -554,6 +554,7 @@ class QLearner(Module):
         replay_buffer_iter = cycle(self.dataloader)
 
         self.model.train()
+        self.model.embedding_layer.train()
         self.ema_model.train()
 
         wandb.watch(self.model, self.ema_model, log="all", log_freq=10)
