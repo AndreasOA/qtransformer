@@ -16,13 +16,6 @@ from einops.layers.torch import Rearrange, Reduce
 
 from src.attend import Attend
 
-from classifier_free_guidance_pytorch import (
-    TextConditioner,
-    AttentionTextConditioner,
-    NullConditioner,
-    classifier_free_guidance
-)
-
 # helpers
 
 def exists(val):
@@ -51,28 +44,6 @@ def pack_one(x, pattern):
 
 def unpack_one(x, ps, pattern):
     return unpack(x, ps, pattern)[0]
-
-# 2d rotary positional embedding
-# https://arxiv.org/abs/2104.09864
-
-class RotaryEmbedding(Module):
-    def __init__(self, dim, omega = 10000):
-        super().__init__()
-        inv_freq = 1.0 / (omega ** (torch.arange(0, dim, 4).float() / dim))
-        self.register_buffer('inv_freq', inv_freq)
-
-    @autocast(enabled = False)
-    def forward(self, height_width):
-        device, dtype = self.inv_freq.device, self.inv_freq.dtype
-
-        axial_pos = torch.arange(height_width, device = device).type(dtype)
-
-        freqs = torch.einsum('i, j -> i j', axial_pos, self.inv_freq)
-        freqs = repeat(freqs, '... f -> ... (f c)', c = 2)
-
-        freqs = torch.broadcast_tensors(freqs[None, :, :], freqs[:, None, :])
-        freqs = torch.cat(freqs, dim = -1)
-        return rearrange(freqs, '... f -> (...) f')
 
 def rotate_half(x):
     x1, x2 = rearrange(x, '... (d c) -> ... d c', c = 2).unbind(dim = -1)
@@ -103,15 +74,6 @@ class RMSNorm(Module):
 
     def forward(self, x):
         return l2norm(x) * self.gamma * self.scale
-
-class ChanRMSNorm(Module):
-    def __init__(self, dim, affine = True):
-        super().__init__()
-        self.scale = dim ** 0.5
-        self.gamma = nn.Parameter(torch.ones(dim, 1, 1)) if affine else 1.
-
-    def forward(self, x):
-        return l2norm(x, dim = 1) * self.gamma * self.scale
 
 # sinusoidal positions
 
@@ -160,99 +122,10 @@ class FeedForward(Module):
     def forward(
         self,
         x,
-        cond_fn: Optional[Callable] = None
     ):
         x = self.norm(x)
-
-        assert xnor(self.adaptive_ln, exists(cond_fn))
-
-        if exists(cond_fn):
-            # adaptive layernorm
-            x = cond_fn(x)
-
         return self.net(x)
 
-# MBConv
-
-class SqueezeExcitation(Module):
-    def __init__(self, dim, shrinkage_rate = 0.25):
-        super().__init__()
-        hidden_dim = int(dim * shrinkage_rate)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.gate = nn.Sequential(
-            Reduce('b c h w -> b c', 'mean'),
-            nn.Linear(dim, hidden_dim, bias = False),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, dim, bias = False),
-            nn.Sigmoid(),
-            Rearrange('b c -> b c 1 1')
-        )
-
-    def forward(self, x):
-        return x * self.gate(x)
-
-class MBConvResidual(Module):
-    def __init__(self, fn, dropout = 0.):
-        super().__init__()
-        self.fn = fn
-        self.dropsample = Dropsample(dropout)
-
-    def forward(self, x):
-        out = self.fn(x)
-        out = self.dropsample(out)
-        return out + x
-
-class Dropsample(Module):
-    def __init__(self, prob = 0):
-        super().__init__()
-        self.prob = prob
-  
-    def forward(self, x):
-        batch, device = x.shape[0], x.device
-
-        if self.prob == 0. or (not self.training):
-            return x
-
-        keep_mask = torch.FloatTensor((batch, 1, 1, 1), device = device).uniform_() > self.prob
-        return x * keep_mask / (1 - self.prob)
-
-def MBConv(
-    dim_in,
-    dim_out,
-    *,
-    downsample,
-    expansion_rate = 4,
-    shrinkage_rate = 0.25,
-    dropout = 0.,
-    is_distributed = None,
-    use_layernorm = True
-):
-    hidden_dim = int(expansion_rate * dim_out)
-    stride = 2 if downsample else 1
-
-    if use_layernorm:
-        norm_klass = ChanRMSNorm
-    else:
-        norm_klass = MaybeSyncBatchnorm2d(is_distributed)
-
-    net = nn.Sequential(
-        nn.Conv2d(dim_in, hidden_dim, 1),
-        norm_klass(hidden_dim),
-        nn.GELU(),
-        nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
-        norm_klass(hidden_dim),
-        nn.GELU(),
-        SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
-        nn.Conv2d(hidden_dim, dim_out, 1),
-        norm_klass(dim_out)
-    )
-
-    if dim_in == dim_out and not downsample:
-        net = MBConvResidual(net, dropout = dropout)
-
-    return net
-
-# attention related classes
 
 class Attention(Module):
     def __init__(
@@ -337,155 +210,6 @@ class Attention(Module):
         out = self.to_out(out)
         return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
 
-class MaxViT(Module):
-    @beartype
-    def __init__(
-        self,
-        *,
-        num_classes,
-        dim,
-        depth: Tuple[int, ...],
-        heads = 8,
-        dim_head = 64,
-        dim_conv_stem = None,
-        window_size = 7,
-        mbconv_expansion_rate = 4,
-        mbconv_shrinkage_rate = 0.25,
-        use_layernorm = True,
-        dropout = 0.1,
-        channels = 3,
-        flash_attn = True
-    ):
-        super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # convolutional stem
-
-        dim_conv_stem = default(dim_conv_stem, dim)
-
-        self.conv_stem = nn.Sequential(
-            nn.Conv2d(channels, dim_conv_stem, 3, stride = 2, padding = 1),
-            nn.Conv2d(dim_conv_stem, dim_conv_stem, 3, padding = 1)
-        )
-
-        # variables
-
-        num_stages = len(depth)
-
-        dims = tuple(map(lambda i: (2 ** i) * dim, range(num_stages)))
-        dims = (dim_conv_stem, *dims)
-        dim_pairs = tuple(zip(dims[:-1], dims[1:]))
-
-        self.layers = ModuleList([])
-
-        # shorthand for window size for efficient block - grid like attention
-
-        self.window_size = window_size
-        w = window_size
-
-        # rotary embedding
-
-        assert divisible_by(dim_head, 4), f'{dim_head} must be divisible by 4 for axial rotary embedding for maxvit'
-
-        self.axial_rotary_emb = RotaryEmbedding(dim_head)
-        self.register_buffer('cached_rotary_emb', self.axial_rotary_emb(window_size), persistent = False)
-
-        # iterate through stages
-
-        cond_hidden_dims = []
-
-        for ind, ((layer_dim_in, layer_dim), layer_depth) in enumerate(zip(dim_pairs, depth)):
-            for stage_ind in range(layer_depth):
-                is_first = stage_ind == 0
-                stage_dim_in = layer_dim_in if is_first else layer_dim
-
-                cond_hidden_dims.append(stage_dim_in)
-
-                block = nn.ModuleList([
-                    MBConv(
-                        stage_dim_in,
-                        layer_dim,
-                        downsample = is_first,
-                        expansion_rate = mbconv_expansion_rate,
-                        shrinkage_rate = mbconv_shrinkage_rate,
-                        use_layernorm = use_layernorm
-                    ),
-                    Rearrange('b d (x w1) (y w2) -> b x y w1 w2 d', w1 = w, w2 = w),  # block-like attention
-                    Residual(Attention(dim = layer_dim, heads = heads, dim_head = dim_head, dropout = dropout, window_size = w, flash = flash_attn)),
-                    Residual(FeedForward(dim = layer_dim, dropout = dropout)),
-                    Rearrange('b x y w1 w2 d -> b d (x w1) (y w2)'),
-
-                    Rearrange('b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = w, w2 = w),  # grid-like attention
-                    Residual(Attention(dim = layer_dim, heads = heads, dim_head = dim_head, dropout = dropout, window_size = w, flash = flash_attn)),
-                    Residual(FeedForward(dim = layer_dim, dropout = dropout)),
-                    Rearrange('b x y w1 w2 d -> b d (w1 x) (w2 y)'),
-                ])
-
-                self.layers.append(block)
-
-        embed_dim = dims[-1]
-        self.embed_dim = dims[-1]
-
-        self.cond_hidden_dims = cond_hidden_dims
-
-        # mlp head out
-
-        self.mlp_head = nn.Sequential(
-            Reduce('b d h w -> b d', 'mean'),
-            RMSNorm(embed_dim),
-            nn.Linear(embed_dim, num_classes)
-        )
-
-    @beartype
-    def forward(
-        self,
-        img,
-        texts: Optional[List[str]] = None,
-        cond_fns: Optional[Tuple[Callable, ...]] = None,
-        cond_drop_prob = 0.,
-        return_embeddings = False
-    ):
-        assert all([divisible_by(d, self.window_size) for d in img.shape[-2:]])
-
-        x = self.conv_stem(img.to(self.device))
-
-        rotary_emb = self.cached_rotary_emb
-
-        cond_fns = iter(default(cond_fns, []))
-
-        for (
-            mb_conv,
-            rearr_windowed_in,
-            windowed_attn,
-            windowed_ff,
-            rearr_windowed_out,
-            rearr_grid_in,
-            grid_attn,
-            grid_ff,
-            rearr_grid_out
-        ) in self.layers:
-            cond_fn = next(cond_fns, None)
-
-            if exists(cond_fn):
-                x = cond_fn(x)
-
-            x = mb_conv(x)
-            x = rearr_windowed_in(x)
-            x = windowed_attn(x, rotary_emb = rotary_emb)
-            x = windowed_ff(x)
-            x = rearr_windowed_out(x)
-
-            x = rearr_grid_in(x)
-            x = grid_attn(x, rotary_emb = rotary_emb)
-            x = grid_ff(x)
-            x = rearr_grid_out(x)
-
-        if return_embeddings:
-            return x
-
-        return self.mlp_head(x)
-
-# attention
-
 class TransformerAttention(Module):
     def __init__(
         self,
@@ -539,7 +263,6 @@ class TransformerAttention(Module):
         context = None,
         mask = None,
         attn_mask = None,
-        cond_fn: Optional[Callable] = None,
         cache: Optional[Tensor] = None,
         return_cache = False
     ):
@@ -553,11 +276,6 @@ class TransformerAttention(Module):
         kv_input = default(context, x)
 
         x = self.norm(x)
-
-        assert xnor(exists(cond_fn), self.adaptive_ln)
-
-        if exists(cond_fn):
-            x = cond_fn(x)
 
         q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim = -1)
 
@@ -632,7 +350,6 @@ class Transformer(Module):
     def forward(
         self,
         x,
-        cond_fns: Optional[Tuple[Callable, ...]] = None,
         attn_mask = None,
         context: Optional[Tensor] = None,
         cache: Optional[Tensor] = None,
@@ -643,7 +360,6 @@ class Transformer(Module):
         if has_cache:
             x_prev, x = x[..., :-1, :], x[..., -1:, :]
 
-        cond_fns = iter(default(cond_fns, []))
         cache = iter(default(cache, []))
 
         new_caches = []
@@ -652,7 +368,6 @@ class Transformer(Module):
             attn_out, new_cache = attn(
                 x,
                 attn_mask = attn_mask,
-                cond_fn = next(cond_fns, None),
                 return_cache = True,
                 cache = next(cache, None)
             )
@@ -665,7 +380,7 @@ class Transformer(Module):
                 assert exists(context)
                 x = maybe_cross_attn(x, context = context) + x
 
-            x = ff(x, cond_fn = next(cond_fns, None)) + x
+            x = ff(x) + x
 
         new_caches = torch.stack(new_caches)
 
@@ -847,10 +562,6 @@ class QHeadMultipleActions(Module):
 
         return q_values.sigmoid()
 
-    def get_random_actions(self, batch_size, num_actions = None):
-        num_actions = default(num_actions, self.num_actions)
-        return torch.randint(0, self.action_bins, (batch_size, num_actions), device = self.device)
-
     @torch.no_grad()
     def get_optimal_actions(
         self,
@@ -862,9 +573,6 @@ class QHeadMultipleActions(Module):
     ):
         assert 0. <= prob_random_action <= 1.
         batch = encoded_state.shape[0]
-
-        if prob_random_action == 1:
-            return self.get_random_actions(batch)
 
         sos_token = reduce(encoded_state, 'b ... d -> b 1 d', 'mean')
         tokens = self.maybe_append_actions(sos_token, actions = actions)
@@ -956,12 +664,8 @@ class QRoboticTransformer(Module):
         token_learner_ff_mult = 2,
         token_learner_num_layers = 2,
         token_learner_num_output_tokens = 8,
-        cond_drop_prob = 0.2,
-        use_attn_conditioner = False,
-        conditioner_kwargs: dict = dict(),
         dueling = False,                       # https://arxiv.org/abs/1511.06581
         flash_attn = True,
-        condition_on_text = True,
         q_head_attn_kwargs: dict = dict(
             attn_heads = 8,
             attn_dim_head = 64,
@@ -981,6 +685,7 @@ class QRoboticTransformer(Module):
         self.is_single_action = num_actions == 1
         self.action_bins = action_bins
         attend_dim = action_bins*2
+        self.num_learned_tokens = token_learner_num_output_tokens
 
         # Embedding
         self.embedding_layer = MLPwithEmbedding(state_dim, attend_dim, 512)
@@ -992,11 +697,9 @@ class QRoboticTransformer(Module):
             heads = heads,
             depth = depth,
             flash_attn = flash_attn,
-            adaptive_ln = condition_on_text,
+            adaptive_ln = False,
             final_norm = True
         )
-
-        self.cond_drop_prob = cond_drop_prob
 
         self.q_head = QHeadMultipleActions(
             attend_dim,
@@ -1006,8 +709,6 @@ class QRoboticTransformer(Module):
             **q_head_attn_kwargs
         )
 
-    def get_random_actions(self, batch_size = 1):
-        return self.q_head.get_random_actions(batch_size)
 
     @torch.no_grad()
     def get_optimal_actions(
@@ -1042,16 +743,31 @@ class QRoboticTransformer(Module):
         if state.ndim < 3:
             state = state.unsqueeze(0)
 
-        state = self.embedding_layer(state)
+        batch_size, num_states, state_shape = state.shape
+        device = state.device
+        
+        # Apply MLP to input state
+        learned_tokens = self.embedding_layer(state)  # shape: (batch_size, hidden_dim)
+        
+        # Positional embedding
+        pos_emb = posemb_sincos_1d(num_states, learned_tokens.shape[-1], device=device, dtype=learned_tokens.dtype)
+        #learned_tokens = repeat(learned_tokens.squeeze(), 'b d -> b n d', n=self.num_learned_tokens) + pos_emb
+        learned_tokens = learned_tokens + repeat(pos_emb, 'n d -> (n r) d', r = self.num_learned_tokens)
+        
+        # Causal attention mask
+        attn_mask = ~torch.ones((num_states, num_states), dtype=torch.bool, device=device).triu(1)
+        attn_mask = repeat(attn_mask, 'i j -> (i r1) (j r2)', r1 = self.num_learned_tokens, r2 = self.num_learned_tokens)
+        
+        # Transformer encoding
+        # learned_tokens = rearrange(learned_tokens, 'b n d -> n b d')
+        attended_tokens = self.transformer(learned_tokens, attn_mask=attn_mask)
+        
+        return attended_tokens
 
-        return state
-
-    @classifier_free_guidance
     def forward(
         self,
         state: Tensor,
         actions: Optional[Tensor] = None,
-        cond_drop_prob = 0.,
     ):
 
         # just auto-move inputs to the same device as robotic transformer
