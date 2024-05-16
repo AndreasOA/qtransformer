@@ -13,7 +13,6 @@ model_config:
   depth: 1
   heads: 8
   dim_head: 64
-  cond_drop_prob: 0.2
   dueling: True
 
 training_config: 
@@ -26,6 +25,7 @@ training_config:
     binary_rewards: False
     test: False
     test_every: 500
+    conservative_reg_loss_weight: 0.9
         
 test_config: 
     env_name: box-close-v2

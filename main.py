@@ -43,6 +43,7 @@ class Pipeline:
             grad_accum_every = config["grad_accum_every"],
             test = config["test"],
             agent = agent,
+            conservative_reg_loss_weight = config["conservative_reg_loss_weight"],
             test_every= config["test_every"]
         )
         self.q_learner = self.q_learner.to(self.device)
@@ -56,7 +57,6 @@ class Pipeline:
             depth = config["depth"],
             heads = config["heads"],
             dim_head = config["dim_head"],
-            cond_drop_prob = config["cond_drop_prob"],
             dueling = config["dueling"]
         )
 
