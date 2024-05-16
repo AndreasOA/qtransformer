@@ -103,10 +103,10 @@ class QLearner(Module):
         max_grad_norm = 0.5,
         n_step_q_learning = False,
         discount_factor_gamma = 0.98,
-        conservative_reg_loss_weight = 1., # they claim 1. is best in paper
+        conservative_reg_loss_weight: float = 1., # they claim 1. is best in paper
         optimizer_kwargs: dict = dict(),
-        test = False,
-        test_every = 1000,
+        test: bool = False,
+        test_every: int = 1000,
         agent = None
     ):
         super().__init__()
