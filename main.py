@@ -94,7 +94,7 @@ class Pipeline:
 
     def test_model(self):
         agent = self.setup_agent()
-        agent()
+        agent.run_test()
 
     def run(self):
         if self.config["use_wandb"]:

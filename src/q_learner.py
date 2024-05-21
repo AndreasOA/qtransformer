@@ -96,9 +96,9 @@ class QLearner(Module):
             shuffle = False
         ),
         q_target_ema_kwargs: dict = dict(
-            beta = 0.99,
-            update_after_step = 10,
-            update_every = 5
+            beta = 0.5,
+            update_after_step = 1,
+            update_every = 1
         ),
         max_grad_norm = 0.5,
         n_step_q_learning = False,
@@ -162,14 +162,7 @@ class QLearner(Module):
         self.min_reward = min_reward
         self.monte_carlo_return = monte_carlo_return
 
-        self.dataloader = DataLoader(
-            dataset,
-            batch_size = batch_size,
-            **dataloader_kwargs
-        )
-
-        # prepare
-
+        self.dataloader = DataLoader(dataset, batch_size = batch_size,**dataloader_kwargs)
         (
             self.model,
             self.ema_model,
@@ -195,168 +188,9 @@ class QLearner(Module):
 
         self.register_buffer('step', torch.tensor(0))
 
-    def save(
-        self,
-        checkpoint_num = None,
-        overwrite = True
-    ):
-        name = 'checkpoint'
-        if exists(checkpoint_num):
-            name += f'-{checkpoint_num}'
-
-        path = self.checkpoint_folder / (name + '.pt')
-
-        assert overwrite or not path.exists()
-
-        pkg = dict(
-            model = self.unwrap(self.model).state_dict(),
-            ema_model = self.unwrap(self.ema_model).state_dict(),
-            optimizer = self.optimizer.state_dict(),
-            step = self.step.item()
-        )
-
-        torch.save(pkg, str(path))
-
-    def load(self, path):
-        path = Path(path)
-        assert exists(path)
-
-        pkg = torch.load(str(path))
-
-        self.unwrap(self.model).load_state_dict(pkg['model'])
-        self.unwrap(self.ema_model).load_state_dict(pkg['ema_model'])
-
-        self.optimizer.load_state_dict(pkg['optimizer'])
-        self.step.copy_(pkg['step'])
-
-    @property
-    def device(self):
-        return self.accelerator.device
-
-    @property
-    def is_main(self):
-        return self.accelerator.is_main_process
-
-    def unwrap(self, module):
-        return self.accelerator.unwrap_model(module)
-
-    def print(self, msg):
-        return self.accelerator.print(msg)
 
     def wait(self):
         return self.accelerator.wait_for_everyone()
-
-    def get_discount_matrix(self, timestep):
-        if exists(self.discount_matrix) and self.discount_matrix.shape[-1] >= timestep:
-            return self.discount_matrix[:timestep, :timestep]
-
-        timestep_arange = torch.arange(timestep, device = self.accelerator.device)
-        powers = (timestep_arange[None, :] - timestep_arange[:, None])
-        discount_matrix = torch.triu(self.discount_factor_gamma ** powers)
-
-        self.register_buffer('discount_matrix', discount_matrix, persistent = False)
-        return self.discount_matrix
-
-    def q_learn(
-        self,
-        states:         TensorType[float],
-        actions:        TensorType[int],
-        next_states:    TensorType[float],
-        reward:         TensorType[float],
-        done:           TensorType[bool],
-        *,
-        monte_carlo_return = None
-
-    ) -> Tuple[TensorType[()], QIntermediates]:
-        # 'next' stands for the very next time step (whether state, q, actions etc)
-
-        γ = self.discount_factor_gamma
-        not_terminal = (~done).float()
-
-        # first make a prediction with online q robotic transformer
-        # select out the q-values for the action that was taken
-
-        q_pred_all_actions = self.model(states)
-        q_pred = batch_select_indices(q_pred_all_actions, actions)
-
-        # use an exponentially smoothed copy of model for the future q target. more stable than setting q_target to q_eval after each batch
-        # the max Q value is taken as the optimal action is implicitly the one with the highest Q score
-
-        q_next = self.ema_model(next_states).amax(dim = -1)
-        q_next.clamp_(min = default(monte_carlo_return, -1e4))
-
-        # Bellman's equation. most important line of code, hopefully done correctly
-
-        q_target = reward + not_terminal * (γ * q_next)
-
-        # now just force the online model to be able to predict this target
-
-        loss = F.mse_loss(q_pred, q_target)
-
-        # that's it. ~5 loc for the heart of q-learning
-        # return loss and some of the intermediates for logging
-
-        return loss, QIntermediates(q_pred_all_actions, q_pred, q_next, q_target)
-
-    def n_step_q_learn(
-        self,
-        states:         TensorType[float],
-        actions:        TensorType[int],
-        next_states:    TensorType[float],
-        rewards:        TensorType[float],
-        dones:          TensorType[bool],
-        *,
-        monte_carlo_return = None
-
-    ) -> Tuple[TensorType[()], QIntermediates]:
-
-        num_timesteps, device = states.shape[1], states.device
-
-        # fold time steps into batch
-
-        states, time_ps = pack_one(states, '* c f h w')
-
-        # repeat text embeds per timestep
-
-        γ = self.discount_factor_gamma
-
-        # anything after the first done flag will be considered terminal
-
-        dones = dones.cumsum(dim = -1) > 0
-        dones = F.pad(dones, (1, 0), value = False)
-
-        not_terminal = (~dones).float()
-
-        # get q predictions
-
-        actions = rearrange(actions, 'b t -> (b t)')
-
-        q_pred_all_actions = self.model(states)
-        q_pred = batch_select_indices(q_pred_all_actions, actions)
-        q_pred = unpack_one(q_pred, time_ps, '*')
-
-        q_next = self.ema_model(next_states).amax(dim = -1)
-        q_next.clamp_(min = default(monte_carlo_return, -1e4))
-
-        # prepare rewards and discount factors across timesteps
-
-        rewards, _ = pack([rewards, q_next], 'b *')
-
-        γ = self.get_discount_matrix(num_timesteps + 1)[:-1, :]
-
-        # account for discounting using the discount matrix
-
-        q_target = einsum('b t, q t -> b q', not_terminal * rewards, γ)
-
-        # have transformer learn to predict above Q target
-
-        loss = F.mse_loss(q_pred, q_target)
-
-        # prepare q prediction
-
-        q_pred_all_actions = unpack_one(q_pred_all_actions, time_ps, '* a')
-
-        return loss, QIntermediates(q_pred_all_actions, q_pred, q_next, q_target)
 
     def autoregressive_q_learn_handle_single_timestep(
         self,
@@ -372,6 +206,7 @@ class QLearner(Module):
         simply detect and handle single timestep
         and use `autoregressive_q_learn` as more general function
         """
+        print("Actions autoregress handler", actions)
         if states.ndim == 4:
             states = states[0]
 
@@ -412,9 +247,10 @@ class QLearner(Module):
         num_timesteps, device = states.shape[1], states.device
 
         # fold time steps into batch
-
-        #states, time_ps = pack_one(states, '* c f h w')
-        actions, _ = pack_one(actions, '* n')
+        print("Actions autoregress q learner", actions) 
+        states, time_ps = pack_one(states, '* f')
+        actions, _ = pack_one(actions.detach(), '* n')
+        print("Actions autoregress q learner", actions)
 
         # repeat text embeds per timestep
         # anything after the first done flag will be considered terminal
@@ -435,9 +271,10 @@ class QLearner(Module):
         # get predicted Q for each action
 
         q_pred_all_actions = self.model(states, actions = actions)
+        print("PRED:", q_pred_all_actions.argmax(dim = -1))
         q_pred = batch_select_indices(q_pred_all_actions, actions)
-        #q_pred = unpack_one(q_pred, time_ps, '* n')
-
+        q_pred = unpack_one(q_pred, time_ps, '* n')
+        
         # get q_next
 
         q_next = self.ema_model(next_states)
@@ -446,9 +283,12 @@ class QLearner(Module):
 
         # get target Q
 
-        q_target_all_actions = self.ema_model(states, actions = actions)
+        q_target_all_actions = self.ema_model(states, actions = actions).detach()
+        #one_hot_actions = torch.zeros_like(q_target_all_actions)
+        #actions = actions.type(torch.int64)
+        #q_target_all_actions = one_hot_actions.scatter_(2, actions.unsqueeze(-1), 1)
+        print("TARGET:", q_target_all_actions.argmax(dim = -1))
         q_target = q_target_all_actions.max(dim = -1).values
-
         q_target.clamp_(min = monte_carlo_return)
 
         # main contribution of the paper is the following logic
@@ -457,15 +297,14 @@ class QLearner(Module):
         # first take care of the loss for all actions except for the very last one
 
         q_pred_rest_actions, q_pred_last_action      = q_pred[..., :-1], q_pred[..., -1]
-        q_target_rest_actions = q_target[..., 1:]
+        q_target_first_action, q_target_rest_actions = q_target[..., 0], q_target[..., 1:]
 
         losses_all_actions_but_last = F.mse_loss(q_pred_rest_actions, q_target_rest_actions, reduction = 'none')
 
         # next take care of the very last action, which incorporates the rewards
 
-        q_target_last_action = rewards.squeeze() + γ * q_next[0]
-        #q_pred_last_action = rewards.squeeze() + γ * q_pred_last_action
-
+        #q_target_last_action, _ = pack([q_target_first_action, q_next], 'b *')
+        q_target_last_action = rewards + γ * q_next[0]
         losses_last_action = F.mse_loss(q_pred_last_action, q_target_last_action, reduction = 'none')
 
         # flatten and average
@@ -481,9 +320,10 @@ class QLearner(Module):
         monte_carlo_return: Optional[float] = None
     ):
         states, actions, next_state, rewards, dones = args
-
-        scaled_tensor = (actions + 1) / 2 * 256
+        print("True Action: ", actions)
+        scaled_tensor = (actions + 1) / 2 * 1024
         actions = scaled_tensor.floor().to(torch.int)
+        print("True Actions converted: ", actions)
 
         # q-learn kwargs
 
@@ -492,21 +332,10 @@ class QLearner(Module):
         )
 
         # main q-learning loss, respectively
-        # 1. proposed autoregressive q-learning for multiple actions - (handles single or n-step automatically)
-        # 2. single action - single timestep (classic q-learning)
-        # 3. single action - n-steps
+        # proposed autoregressive q-learning for multiple actions - (handles single or n-step automatically)
 
-        if self.is_multiple_actions:
-            td_loss, q_intermediates = self.autoregressive_q_learn_handle_single_timestep(states, actions, next_state, rewards, dones, **q_learn_kwargs)
-            num_timesteps = actions.shape[1]
-
-        elif self.n_step_q_learning:
-            td_loss, q_intermediates = self.n_step_q_learn(states, actions, next_state, rewards, dones, **q_learn_kwargs)
-            num_timesteps = actions.shape[1]
-
-        else:
-            td_loss, q_intermediates = self.q_learn(states, actions, next_state, rewards, dones, **q_learn_kwargs)
-            num_timesteps = 1
+        td_loss, q_intermediates = self.autoregressive_q_learn_handle_single_timestep(states, actions, next_state, rewards, dones, **q_learn_kwargs)
+        num_timesteps = actions.shape[1]
 
         if not self.has_conservative_reg_loss:
             return loss, Losses(td_loss, self.zero)
@@ -582,7 +411,7 @@ class QLearner(Module):
                     self.accelerator.backward(loss / self.grad_accum_every)
 
             if (step + 1) % 50 == 0:
-                self.print(f'Step: {step}, loss: {loss:.3f}, td loss: {td_loss.item():.3f}, conservative reg loss: {conservative_reg_loss.item():.3f}')
+                print(f'Step: {step}, loss: {loss:.3f}, td loss: {td_loss.item():.3f}, conservative reg loss: {conservative_reg_loss.item():.3f}')
 
             # clip gradients (transformer best practices)
 
@@ -612,4 +441,4 @@ class QLearner(Module):
 
             
 
-        self.print('training complete')
+        print('training complete')

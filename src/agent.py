@@ -87,6 +87,7 @@ class ReplayMemoryDataset(Dataset):
 
     def __getitem__(self, idx):
         episode_index, timestep_index = self.indices[idx]
+        print(episode_index, timestep_index)
         start_index = episode_index*self.max_episode_len + timestep_index
         end_index = start_index + self.num_timesteps
 
@@ -154,9 +155,8 @@ class Agent(Module):
         self.num_episodes = num_episodes
         self.max_num_steps_per_episode = max_num_steps_per_episode
 
-    @beartype
     @torch.no_grad()
-    def forward(self):
+    def run_test(self):
         self.q_transformer.eval()
 
         for episode in range(self.num_episodes):
@@ -173,9 +173,10 @@ class Agent(Module):
                 actions = self.q_transformer.get_actions(
                     rearrange(curr_state, '... -> 1 ...'),
                 )
-                actions = (actions / 128) -1
-                reward, next_state, done = self.environment(actions)
                 print(actions)
+                actions = (actions / 512) -1
+                reward, curr_state, done = self.environment(actions)
+                
                 if reward > 9:
                     reward_one_cnt +=1
 
@@ -183,8 +184,6 @@ class Agent(Module):
 
                 if done:
                     break
-
-                curr_state = next_state
 
             wandb.log({"episode": episode, "target_achieved_agent": reward_one_cnt,"done_agent": int(done), "last_step_agent": int(last_step)})
 
