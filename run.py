@@ -9,6 +9,7 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from src.train import train_model
 from src.test import test_model
+from src.model import SimpleNet
 
 class Pipeline:
     def __init__(self, config):
@@ -23,15 +24,20 @@ class Pipeline:
         if self.config["wandb"]["use_wandb"]:
             self.setup_wandb()
 
+        self.model = self.setup_model()
+
         if self.config["wandb"]["mode"] == "train":
-            train_model(self.config)
+            train_model(self.config, self.model)
         if self.config["wandb"]["mode"] == "test":
-            test_model(self.config)
+            if self.config.test.load_model:
+                self.model.load_state_dict(torch.load(self.config.test.model_path))
+            test_model(self.config, self.model)
         
         wandb.finish()
 
     def setup_model(self):
-        pass
+        return SimpleNet(39, 4)
+
 
 
 if __name__ == "__main__":
