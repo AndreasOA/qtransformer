@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 
 class MetaworldDataset(Dataset):
     def __init__(self, file_path):
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         data = np.load(file_path)
         self.states = data['observations']
         self.actions = data['actions']
@@ -13,9 +14,9 @@ class MetaworldDataset(Dataset):
         return len(self.states)
 
     def __getitem__(self, idx):
-        state = torch.tensor(self.states[idx][0], dtype=torch.float32)
-        action = torch.tensor(self.actions[idx][0], dtype=torch.float32)
-        reward = torch.tensor(self.rewards[idx], dtype=torch.float32)
+        state = torch.tensor(self.states[idx][0], dtype=torch.float32, device=self.device)
+        action = torch.tensor(self.actions[idx][0], dtype=torch.float32, device=self.device)
+        reward = torch.tensor(self.rewards[idx], dtype=torch.float32, device=self.device)
         return state, action, reward
 
 def get_dataloader(file_path, batch_size, shuffle=False):

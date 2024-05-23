@@ -13,8 +13,9 @@ def save_model(model, path='simple_net.pth'):
 
 
 def train_model(cfg):
-
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = SimpleNet(39, 256, 4)
+    model.to(device)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=cfg.model.learning_rate)
     dataloader = get_dataloader(cfg.train.file, cfg.train.batch_size, cfg.train.shuffle)

@@ -3,7 +3,7 @@ defaults:
 
 wandb:
   model_name: qtransformer
-  mode: test
+  mode: train
   use_wandb: True
 
 model:
@@ -18,7 +18,7 @@ train:
   batch_size: 32
   epochs: 2
   epsilon: 0.1
-  shuffle: False
+  shuffle: True
   file: "metaworld/button-press-topdown-wall-v2.npz"
   model_path: "simple_net.pth"
 
