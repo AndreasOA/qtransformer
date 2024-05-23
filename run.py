@@ -2,14 +2,13 @@ import torch
 import numpy as np
 import metaworld
 import torch
-import gym
-import matplotlib.pyplot as plt
 import time
 import wandb
 import os
 from hydra import compose, initialize
 from omegaconf import OmegaConf
 from src.train import train_model
+from src.test import test_model
 
 class Pipeline:
     def __init__(self, config):
@@ -26,8 +25,13 @@ class Pipeline:
 
         if self.config["wandb"]["mode"] == "train":
             train_model(self.config)
+        if self.config["wandb"]["mode"] == "test":
+            test_model(self.config)
         
         wandb.finish()
+
+    def setup_model(self):
+        pass
 
 
 if __name__ == "__main__":

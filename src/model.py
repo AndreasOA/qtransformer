@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from transformers import BertModel
 
 class QTransformer(nn.Module):
     def __init__(self, state_dim, action_dim, n_layers, n_heads, num_bins):
@@ -10,6 +9,34 @@ class QTransformer(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.fc = nn.Linear(state_dim, action_dim * num_bins)  # Output: action_dim * num_bins
 
+
+    def discretize_actions(actions, num_bins):
+        """
+        Discretize continuous actions into bins.
+        Args:
+            actions (Tensor): Continuous actions in the range (-1, 1).
+            num_bins (int): Number of discrete bins.
+        Returns:
+            Tensor: Discretized actions.
+        """
+        # Rescale actions from (-1, 1) to (0, num_bins-1)
+        actions = ((actions + 1) * 0.5 * (num_bins - 1)).long()
+        return actions
+
+    def undiscretize_actions(discrete_actions, num_bins):
+        """
+        Convert discrete actions back to continuous values in the range (-1, 1).
+        Args:
+            discrete_actions (Tensor): Discretized actions.
+            num_bins (int): Number of discrete bins.
+        Returns:
+            Tensor: Continuous actions in the range (-1, 1).
+        """
+        # Rescale discrete actions from (0, num_bins-1) back to (-1, 1)
+        continuous_actions = ((discrete_actions.float() / (num_bins - 1)) * 2) - 1
+        return continuous_actions
+
+
     def forward(self, x):
         x = x.permute(1, 0, 2)  # [batch_size, seq_len, state_dim] -> [seq_len, batch_size, state_dim]
         x = self.transformer_encoder(x)
@@ -17,3 +44,17 @@ class QTransformer(nn.Module):
         q_values = self.fc(x)
         q_values = q_values.view(q_values.size(0), -1, self.num_bins)  # Reshape to [batch_size, action_dim, num_bins]
         return q_values
+
+
+class SimpleNet(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(SimpleNet, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+    
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        return out

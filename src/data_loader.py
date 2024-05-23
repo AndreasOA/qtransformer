@@ -13,12 +13,24 @@ class MetaworldDataset(Dataset):
         return len(self.states)
 
     def __getitem__(self, idx):
-        state = torch.tensor(self.states[idx], dtype=torch.float32)
-        action = torch.tensor(self.actions[idx], dtype=torch.float32)
+        state = torch.tensor(self.states[idx][0], dtype=torch.float32)
+        action = torch.tensor(self.actions[idx][0], dtype=torch.float32)
         reward = torch.tensor(self.rewards[idx], dtype=torch.float32)
         return state, action, reward
 
-def get_dataloader(file_path, batch_size):
+def get_dataloader(file_path, batch_size, shuffle=False):
     dataset = MetaworldDataset(file_path)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloader
+
+
+if "__main__" == __name__:
+    dataloader = get_dataloader("metaworld/button-press-topdown-wall-v2.npz", 4)
+    for states, actions, rewards in dataloader:
+        print(states.shape, actions.shape, rewards.shape)
+#        print("="*50)
+#        print(states)
+#        print("="*50)
+#        print(rewards)
+#        print("="*50)
+#        print(actions)
