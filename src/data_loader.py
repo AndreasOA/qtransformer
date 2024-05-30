@@ -14,7 +14,7 @@ class MetaworldDataset(Dataset):
         return len(self.states)
 
     def __getitem__(self, idx):
-        state = torch.tensor(self.states[idx][0], dtype=torch.float32, device=self.device)
+        state = torch.tensor(self.states[idx][0], dtype=torch.float32, device=self.device, requires_grad=True)
         action = torch.tensor(self.actions[idx][0], dtype=torch.float32, device=self.device)
         reward = torch.tensor(self.rewards[idx], dtype=torch.float32, device=self.device)
         return state, action, reward

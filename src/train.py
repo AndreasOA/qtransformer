@@ -2,9 +2,10 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import random
-from src.model import SimpleNet
+from src.model import SimpleNet, QRoboticTransformer
 from src.data_loader import get_dataloader
 import wandb
+from ema_pytorch import EMA
 
 
 def save_model(model, path='simple_net.pth'):

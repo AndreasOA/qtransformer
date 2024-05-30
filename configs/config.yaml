@@ -3,7 +3,7 @@ defaults:
 
 wandb:
   model_name: qtransformer
-  mode: test
+  mode: train
   use_wandb: True
 
 model:
@@ -20,7 +20,7 @@ train:
   epsilon: 0.1
   shuffle: False
   file: "metaworld/button-press-topdown-wall-v2.npz"
-  model_path: "simple_net.pth"
+  model_path: "trafo.pth"
 
 test:
   load_model: True

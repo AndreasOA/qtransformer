@@ -9,7 +9,7 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from src.train import train_model
 from src.test import test_model
-from src.model import SimpleNet
+from src.model import SimpleNet, QRoboticTransformer
 
 class Pipeline:
     def __init__(self, config):
@@ -36,7 +36,7 @@ class Pipeline:
         wandb.finish()
 
     def setup_model(self):
-        return SimpleNet(39, 4)
+        return QRoboticTransformer()
 
 
 
