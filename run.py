@@ -7,7 +7,7 @@ import wandb
 import os
 from hydra import compose, initialize
 from omegaconf import OmegaConf
-from src.train import train_model
+from src.train import train_model_simple, QLearner
 from src.test import test_model
 from src.model import SimpleNet, QRoboticTransformer
 
@@ -25,9 +25,10 @@ class Pipeline:
             self.setup_wandb()
 
         self.model = self.setup_model()
+        self.q_learner = QLearner(self.model, self.config)
 
         if self.config["wandb"]["mode"] == "train":
-            train_model(self.config, self.model)
+            self.q_learner.train_model_qlearn()
         if self.config["wandb"]["mode"] == "test":
             if self.config.test.load_model:
                 self.model.load_state_dict(torch.load(self.config.test.model_path))
@@ -36,7 +37,15 @@ class Pipeline:
         wandb.finish()
 
     def setup_model(self):
-        return QRoboticTransformer()
+        return QRoboticTransformer(state_dim=self.config.model.state_dim, 
+                                   action_bins=self.config.model.action_bins, 
+                                   num_actions=self.config.model.action_dim, 
+                                   transformer_dim=self.config.model.transformer_dim, 
+                                   transformer_depth=self.config.model.transformer_depth, 
+                                   heads=self.config.model.heads, 
+                                   dim_head=self.config.model.dim_head, 
+                                   dropout=self.config.model.dropout
+                                   )
 
 
 

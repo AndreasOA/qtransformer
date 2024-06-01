@@ -19,10 +19,9 @@ def test_model(cfg, model):
     # Perform actions using the model
     for _ in range(cfg.test.steps):
         with torch.no_grad():
-            action = model(obs.unsqueeze(0)).squeeze(0)
-
+            action = model.get_optimal_actions(obs.unsqueeze(0)).squeeze(0)
         reward, next_state, done, truncated = meta_env.forward(action)
-        print(f"Reward: {reward.item()}, Done: {done.item()}, Truncated: {truncated.item()}")
+        print(f"Reward: {reward.item()}, Done: {done.item()}, Truncated: {truncated.item()}, Action: {action}")
 
         if done.item() or truncated.item():
             obs = meta_env.reset()

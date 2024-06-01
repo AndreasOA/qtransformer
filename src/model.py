@@ -126,9 +126,9 @@ class QRoboticTransformer(Module):
     def get_optimal_actions(self, state):
         x = self.forward(state)
         x = x.argmax(dim=-1)
-        return self.undiscretize_actions(x, self.action_bins)
+        return self.undiscretize_actions(x)
 
-    def discretize_actions(self, actions, num_bins):
+    def discretize_actions(self, actions):
         """
         Discretize continuous actions into bins.
         Args:
@@ -138,10 +138,10 @@ class QRoboticTransformer(Module):
             Tensor: Discretized actions.
         """
         # Rescale actions from (-1, 1) to (0, num_bins-1)
-        actions = ((actions + 1) * 0.5 * (num_bins - 1)).long()
+        actions = ((actions + 1) * 0.5 * (self.action_bins - 1)).long()
         return actions
 
-    def undiscretize_actions(self, discrete_actions, num_bins):
+    def undiscretize_actions(self, discrete_actions):
         """
         Convert discrete actions back to continuous values in the range (-1, 1).
         Args:
@@ -151,7 +151,7 @@ class QRoboticTransformer(Module):
             Tensor: Continuous actions in the range (-1, 1).
         """
         # Rescale discrete actions from (0, num_bins-1) back to (-1, 1)
-        continuous_actions = ((discrete_actions / (num_bins - 1)) * 2) - 1
+        continuous_actions = ((discrete_actions / (self.action_bins - 1)) * 2) - 1
         return continuous_actions
 
 
