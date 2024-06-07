@@ -130,7 +130,7 @@ class QRoboticTransformer(Module):
         action_seq = self.state_encoder(state).unsqueeze(1)  # (batch_size, 1, transformer_dim)
 
         for i in range(self.num_actions):
-            action_seq = self.positional_encoding(action_seq)
+            #action_seq = self.positional_encoding(action_seq)
             transformer_out = self.transformer(action_seq)
             q_values = self.q_head(transformer_out[:, -1, :])  # Get Q-values for the last token
             action_indices = q_values.argmax(dim=-1)  # (batch_size, 1, action_bins)

@@ -10,7 +10,6 @@ model:
   state_dim: 39
   action_dim: 4
   action_bins: 1024
-  transformer_dim: 128
   transformer_depth: 6
   heads: 8
   dim_head: 64

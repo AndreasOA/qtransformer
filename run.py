@@ -29,8 +29,8 @@ class Pipeline:
         self.q_learner = QLearner(self.model, self.config)
 
         if self.config["wandb"]["mode"] == "train":
-            self.q_learner.train_q_transformer()
-            #self.q_learner.train_model_qlearn()
+            #self.q_learner.train_q_transformer()
+            self.q_learner.train_model_qlearn()
         if self.config["wandb"]["mode"] == "test":
             if self.config.test.load_model:
                 self.model.load_state_dict(torch.load(self.config.test.model_path))
@@ -46,7 +46,7 @@ class Pipeline:
                                    heads=self.config.model.heads, 
                                    dim_head=self.config.model.dim_head, 
                                    dropout=self.config.model.dropout
-                                   )
+                                   ).to(self.device)
 
 
 
