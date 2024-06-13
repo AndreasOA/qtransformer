@@ -10,7 +10,8 @@ from omegaconf import OmegaConf
 from src.train import train_model_simple, QLearner
 from src.test import test_model
 from src.model import SimpleNet, QRoboticTransformer
-from src.model_qt import QRoboticTransformer as QTAdvanced
+#from src.model_qt import QRoboticTransformer as QTAdvanced
+from src.model_repo import QRoboticTransformer
 
 class Pipeline:
     def __init__(self, config):
@@ -30,7 +31,7 @@ class Pipeline:
 
         if self.config["wandb"]["mode"] == "train":
             #self.q_learner.train_q_transformer()
-            self.q_learner.train_model_qlearn()
+            self.q_learner.train_model_qlearn_repo()
         if self.config["wandb"]["mode"] == "test":
             if self.config.test.load_model:
                 self.model.load_state_dict(torch.load(self.config.test.model_path))
@@ -39,14 +40,13 @@ class Pipeline:
         wandb.finish()
 
     def setup_model(self):
-        return QTAdvanced(state_dim=self.config.model.state_dim, 
-                                   action_bins=self.config.model.action_bins, 
+        return QRoboticTransformer(state_dim=self.config.model.state_dim,
                                    num_actions=self.config.model.action_dim,  
-                                   transformer_depth=self.config.model.transformer_depth, 
-                                   heads=self.config.model.heads, 
+                                   action_bins=self.config.model.action_bins, 
+                                   depth=self.config.model.transformer_depth, 
+                                   heads=self.config.model.heads,
                                    dim_head=self.config.model.dim_head, 
-                                   dropout=self.config.model.dropout
-                                   ).to(self.device)
+                                    ).to(self.device)
 
 
 

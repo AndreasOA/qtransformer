@@ -3,7 +3,7 @@ defaults:
 
 wandb:
   model_name: qtransformer
-  mode: train
+  mode: test
   use_wandb: True
 
 model:
@@ -14,14 +14,15 @@ model:
   heads: 8
   dim_head: 64
   dropout: 0.1
-  learning_rate: 0.00001
+  learning_rate: 0.001
   weight_decay: 0.0
 
 train:
   save_model: True
   batch_size: 32
-  epochs: 1
-  shuffle: False
+  context_length: 15
+  epochs: 5
+  shuffle: True
   file: "metaworld/button-press-topdown-wall-v2.npz"
   model_path: "trafo.pth"
   ema_beta: 0.99
@@ -33,12 +34,14 @@ train:
   max_grad_norm: 1.0
   monte_carlo_return: None
   binary_reward: True
+  grad_accum_every: 16
 
 test:
   load_model: True
   env_name: "button-press-topdown-wall-v2"
-  model_path: "trafo.pth"
+  model_path: "trafo_cp_0_accel.pth"
   render: True
-  steps: 10000
+  steps: 200
+  episodes: 10
   
 

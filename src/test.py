@@ -17,13 +17,17 @@ def test_model(cfg, model):
     print("Initial Observation:", obs)
 
     # Perform actions using the model
-    for _ in range(cfg.test.steps):
-        with torch.no_grad():
-            action = model.get_optimal_actions(obs.unsqueeze(0)).squeeze(0)
-        reward, next_state, done, truncated = meta_env.forward(action)
-        print(f"Reward: {reward.item()}, Done: {done.item()}, Truncated: {truncated.item()}, Action: {action}")
+    for episode in range(cfg.test.episodes):
+        obs = meta_env.reset()
+        print("Initial Observation:", obs)
+        for _ in range(cfg.test.steps):
+            with torch.no_grad():
+                action = model.get_optimal_actions(obs.unsqueeze(0).unsqueeze(1)).squeeze(0)
+                action = model.undiscretize_actions(action)
+            reward, next_state, done, truncated = meta_env.forward(action)
+            print(f"Reward: {reward.item()}, Done: {done.item()}, Truncated: {truncated.item()}, Action: {action}")
 
-        if done.item() or truncated.item():
-            obs = meta_env.reset()
-        else:
-            obs = next_state
+            if done.item() or truncated.item():
+                obs = meta_env.reset()
+            else:
+                obs = next_state
