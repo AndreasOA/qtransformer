@@ -22,7 +22,7 @@ class Pipeline:
 
     def setup_wandb(self):
         wandb.login()
-        wandb.init(project=self.config["wandb"]["model_name"])
+        wandb.init(project=self.config["wandb"]["model_name"], config=dict(self.config))
 
     def run(self):
         if self.config["wandb"]["use_wandb"]:
