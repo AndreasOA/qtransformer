@@ -2,20 +2,38 @@ import numpy as np
 import torch
 from einops import rearrange
 from torch.utils.data import Dataset, DataLoader
+import os
 
 class MetaworldDataset(Dataset):
-    def __init__(self, file_path, discount_factor, context_length=10, binary_reward=False):
+    def __init__(self, files, discount_factor, context_length, binary_reward, rescale_reward):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.discount_factor = discount_factor
         self.context_length = context_length
-        data = np.load(file_path)
-        self.states = data['observations']
-        self.next_states = data['next_observations']
-        self.actions = data['actions']
-        self.rewards = data['rewards']
+        self.states, self.next_states, self.actions, self.rewards, self.dones = [], [], [], [], []
+
+        # Load data from multiple files
+        for file_path in files:
+            data = np.load(file_path)
+            self.states.append(data['observations'])
+            self.next_states.append(data['next_observations'])
+            self.actions.append(data['actions'])
+            self.rewards.append(data['rewards'])
+            self.dones.append(data['dones'])
+
+        # Concatenate data from all files
+        self.states = np.concatenate(self.states, axis=0)
+        self.next_states = np.concatenate(self.next_states, axis=0)
+        self.actions = np.concatenate(self.actions, axis=0)
+        self.rewards = np.concatenate(self.rewards, axis=0)
+        self.dones = np.concatenate(self.dones, axis=0)
+
         if binary_reward:
-            self.rewards = np.where(self.rewards > 8.5, 1, 0)
-        self.dones = data['dones']
+            #self.rewards = np.where(self.rewards == 0, -0.5, self.rewards)
+            self.rewards = np.where(self.rewards > 5, 1, 0)
+            #self.rewards = np.where((self.rewards != 1) & (self.rewards != -0.5), 0, self.rewards)
+            
+        if rescale_reward:
+            self.rewards /= 10
 
         done_indices = np.where(self.dones == 1)[0]
         differences = np.diff(done_indices)
@@ -41,25 +59,26 @@ class MetaworldDataset(Dataset):
         
         # Calculate the time steps within the episode
         #episode_length = idx - episode_start_idx + 1
-        #discount_factors = np.power(self.discount_factor, np.arange(episode_length))
+        discount_factors = np.power(self.discount_factor, np.arange(self.context_length))
          
         # Calculate the cumulative return from the episode start to the current idx with discounting
-        #cum_reward = torch.tensor([(self.rewards[episode_start_idx:idx + 1].T * discount_factors).sum()], dtype=torch.float32, device=self.device)   
+        cum_reward = torch.tensor([(self.rewards[start_id: end_id].T * discount_factors).sum()], dtype=torch.float32, device=self.device)   
         state = torch.tensor(self.states[start_id: end_id], dtype=torch.float32, requires_grad=True).squeeze()
         next_state = torch.tensor(self.next_states[start_id: end_id], dtype=torch.float32, requires_grad=True).squeeze()
         action = torch.tensor(self.actions[end_id - 1], dtype=torch.float32).squeeze()
         reward = torch.tensor(self.rewards[end_id - 1], dtype=torch.float32)
+        #reward = reward.mean(dim=0)
         done = torch.tensor(self.dones[end_id - 1], dtype=torch.int)
         return state, action, reward, next_state, done
 
-def get_dataloader(file_path, batch_size, discount_factor=0.98, context_length=10, shuffle=True, binary_reward=False):
-    dataset = MetaworldDataset(file_path, discount_factor=discount_factor, context_length=context_length, binary_reward=binary_reward)
+def get_dataloader(file_path, batch_size, discount_factor=0.98, context_length=10, shuffle=True, binary_reward=False, rescale_reward=False):
+    dataset = MetaworldDataset(file_path, discount_factor=discount_factor, context_length=context_length, binary_reward=binary_reward, rescale_reward=rescale_reward)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloader
 
 
 if "__main__" == __name__:
-    dataloader = get_dataloader("metaworld/button-press-topdown-wall-v2.npz", 4, binary_reward=True)
+    dataloader = get_dataloader("metaworld/", 4, binary_reward=True)
     for states, actions, rewards, next_states, dones in dataloader:
         print(states.shape, actions.shape, rewards.shape, next_states.shape, dones.shape)
         print("="*50)
