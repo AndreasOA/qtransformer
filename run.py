@@ -9,9 +9,11 @@ from hydra import compose, initialize
 from omegaconf import OmegaConf
 from src.train import train_model_simple, QLearner
 from src.test import test_model
-from src.model import SimpleNet, QRoboticTransformer
+#from src.model import SimpleNet, QRoboticTransformer
 #from src.model_qt import QRoboticTransformer as QTAdvanced
 from src.model_repo import QRoboticTransformer
+
+torch.manual_seed(0)
 
 class Pipeline:
     def __init__(self, config):
