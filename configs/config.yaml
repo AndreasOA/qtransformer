@@ -1,0 +1,51 @@
+defaults:
+  - _self_
+
+wandb:
+  model_name: qtransformer
+  mode: train
+  use_wandb: True
+
+model:
+  state_dim: 39
+  action_dim: 4
+  action_bins: 1024
+  transformer_depth: 6
+  heads: 8
+  dim_head: 64
+  dropout: 0.15
+  learning_rate: 0.00075
+  weight_decay: 0.1
+
+train:
+  save_model: True
+  batch_size: 48
+  context_length: 20
+  epochs: 5
+  shuffle: True
+  folder_path: "metaworld/"
+  train_single_task: False
+  file_name: "button-press-v2.npz"
+  num_files: 10
+  model_path: "trafo.pth"
+  ema_beta: 0.99
+  ema_update_after_step: 10
+  ema_update_every: 5
+  discount_factor_gamma: 0.98
+  conservative_reg_loss_weight: 1.0
+  min_reward: 0
+  max_grad_norm: 1.0
+  monte_carlo_return: None
+  binary_reward: True
+  rescale_reward: False
+  grad_accum_every: 8
+
+test:
+  load_model: True
+  env_name: "button-press-v2"
+  model_path: "rescaled_reward_default_settings/trafo_cp_0_999.pth"
+  render: True
+  steps: 200
+  episodes: 3
+  
+

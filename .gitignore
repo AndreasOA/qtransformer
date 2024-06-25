@@ -1,0 +1,7 @@
+metaworld/
+outputs/
+wandb/
+.vscode/
+__pycache__/
+
+*.pth
