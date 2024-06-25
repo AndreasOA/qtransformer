@@ -26,8 +26,10 @@ def select_q_values(t, indices):
 def default(val, d):
     return val if val != "None" else d
 
+
 def exists(val):
     return val is not None
+
 
 class QLearner:
     def __init__(self, model, cfg):
@@ -60,6 +62,7 @@ class QLearner:
         self.initial_lr = cfg.model.learning_rate
         self.num_steps = len(self.dataloader) * self.epochs
         self.scheduler = self.init_scheduler()
+
 
     def init_scheduler(self):
         # Warm-up for the first 1000 steps, then cosine annealing
@@ -96,8 +99,10 @@ class QLearner:
         torch.save(self.model.state_dict(), name)
         print(f'Model saved to {self.save_path}')
 
+
     def wait(self):
         return self.accelerator.wait_for_everyone()
+
 
     def q_learn(self, states, actions, rewards, next_states, dones):
         not_terminal = (1 - dones).float()
@@ -116,7 +121,6 @@ class QLearner:
         q_next = torch.clamp(q_next, min = default(self.monte_carlo_return, -1e4))
 
         # get target Q
-        # unpack back to - (b, t, n)
 
         q_target_all_actions = self.ema_model(states, actions = actions)
         q_target = q_target_all_actions.max(dim = -1).values
@@ -129,15 +133,10 @@ class QLearner:
 
         q_pred_rest_actions, q_pred_last_action      = q_pred[:, :-1], q_pred[:, -1]
         q_target_first_action, q_target_rest_actions = q_target[:, 0], q_target[:, 1:]
-        #q_target_rest_actions = torch.max(q_target_rest_actions, rewards)
 
         losses_all_actions_but_last = F.mse_loss(q_pred_rest_actions, q_target_rest_actions, reduction = 'none')
 
-        # next take care of the very last action, which incorporates the rewards
-        #q_target_last_action, _ = pack([q_target_first_action, q_next], 'b *')
-
         q_target_last_action = rewards.squeeze() + self.discount_factor_gamma * q_next[:, 0]
-        #q_target_last_action = torch.max(q_target_last_action, rewards)
 
         losses_last_action = F.mse_loss(q_pred_last_action, q_target_last_action, reduction = 'none')
 
@@ -161,62 +160,14 @@ class QLearner:
         dataset_action_mask = torch.zeros_like(q_preds).scatter_(-1, actions, torch.ones_like(q_preds))
 
         q_actions_not_taken = q_preds[(1 - dataset_action_mask).bool()]
-        #q_actions_not_taken = rearrange(q_actions_not_taken, '(b t a) -> b t a', b = batch, a = num_non_dataset_actions)
 
         # Min Reward in the paper is 0, formula (2s)
         conservative_reg_loss = ((q_actions_not_taken - self.min_reward) ** 2).sum() / num_non_dataset_actions
 
         # total loss
-
         loss =  0.5 * td_loss + 0.5 * conservative_reg_loss * self.conservative_reg_loss_weight
 
         return loss, (td_loss, conservative_reg_loss)
-
-
-    # def train_model_qlearn(self):
-    #     self.model.train()
-    #     self.ema_model.train()
-    #     if self.cfg.wandb.use_wandb:
-    #         wandb.watch(self.model, self.ema_model, log="all", log_freq=10)
-
-    #     for epoch in range(self.cfg.train.epochs):
-    #         for i, (states, actions, rewards, next_states, dones) in enumerate(self.dataloader):    
-    #             states = states.to(self.device)
-    #             actions = actions.to(self.device)
-    #             rewards = rewards.to(self.device)
-    #             next_states = next_states.to(self.device)
-    #             dones = dones.to(self.device)
-    #             # zero grads
-    #             self.optimizer.zero_grad()
-    #             # main q-learning algorithm
-    #             with torch.no_grad():
-    #                 actions = self.model.discretize_actions(actions)
-    #                 #actions = actions[:, -1]
-    #             loss, (td_loss, conservative_reg_loss) = self.learn(states, actions, rewards, next_states, dones)
-    #             loss.backward()
-
-    #             # clip gradients (transformer best practices)
-    #             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-
-    #             # take optimizer step
-    #             self.optimizer.step()
-
-    #             # update target ema
-    #             self.ema_model.update()
-
-
-    #             if (i+1) % 100 == 0:  # Print every 100 batches
-    #                 print(f'Epoch [{epoch+1}/{self.cfg.train.epochs}], Step [{i+1}/{len(self.dataloader)}], TDLoss: {td_loss.item():.4f} Conservative Loss: {conservative_reg_loss.item():.4f}')
-    #             if self.cfg.wandb.use_wandb:
-    #                 wandb.log({"epoch": epoch, "loss": loss,"td loss": td_loss.item(), "conservative reg loss": conservative_reg_loss.item()})
-
-    #             if self.cfg.train.save_model and (i + 1) % 200 == 0:
-    #                 self.save_model(f"trafo_cp_{epoch}_{i}.pth")
-
-    #     if self.cfg.train.save_model:
-    #         self.save_model()
-
-    #     print('training complete')
 
 
     def train_model_qlearn_repo(self):
@@ -284,82 +235,3 @@ class QLearner:
             self.save_model()
 
         print('training complete')
-
-    ##############################################################################################################
-    # Simplified Approach
-
-    def conservative_q_learning_loss(self, q_values, next_q_values, rewards, actions, dones):
-        q_next = next_q_values.amax(dim=-1)
-        q_pred = select_q_values(q_values, actions)
-        bellman_errors = rewards + self.discount_factor_gamma * q_next * (1 - dones) - q_pred
-        td_loss = bellman_errors.pow(2).mean()
-
-        # Conservative loss
-        conservative_loss = (q_values.pow(2).mean() * self.conservative_reg_loss_weight)
-
-        return td_loss, conservative_loss
-
-
-    def train_q_transformer(self):
-        self.model.train()
-
-        if self.cfg.wandb.use_wandb:
-            wandb.watch(self.model, log="all", log_freq=10)
-
-        for epoch in range(self.epochs):
-            for i, (states, actions, rewards, cum_rewards, next_states, dones) in enumerate(self.dataloader):
-                
-                self.optimizer.zero_grad()
-                q_values = self.model(states)
-
-                with torch.no_grad():
-                    actions = self.model.discretize_actions(actions)
-                    next_q_values = self.model(next_states)
-
-                td_loss, conservative_loss = self.conservative_q_learning_loss(q_values, next_q_values, cum_rewards, actions, dones)
-                loss = td_loss + conservative_loss
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-                self.optimizer.step()
-
-                if (i+1) % 100 == 0:  # Print every 100 batches
-                    print(f'Epoch [{epoch+1}/{self.cfg.train.epochs}], Step [{i+1}/{len(self.dataloader)}], Loss: {loss.item():.4f} Conservative Loss: {conservative_loss.item():.4f}')
-                if self.cfg.wandb.use_wandb:
-                    wandb.log({"epoch": epoch, "loss": loss,"td loss": td_loss.item(), "conservative reg loss": conservative_loss.item(), "reward": rewards.mean()})
-
-        if self.cfg.train.save_model:
-            self.save_model()
-
-        print('training complete')        
-
-
-##############################################################################################################################      
-
-
-def train_model_simple(cfg, model):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=cfg.model.learning_rate)
-
-    model.train()
-    # Training loop
-    for epoch in range(cfg.train.epochs):
-        for i, (states, actions, rewards) in enumerate(dataloader):          
-            # Forward pass
-            outputs = model(states)
-            loss = criterion(outputs, actions)
-            
-            # Backward and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            if (i+1) % 100 == 0:  # Print every 100 batches
-                print(f'Epoch [{epoch+1}/{cfg.train.epochs}], Step [{i+1}/{len(dataloader)}], Loss: {loss.item():.4f}')
-    
-    print('Training complete')
-    save_model(model, cfg.train.model_path)
-    return model
-
-
