@@ -7,11 +7,9 @@ import wandb
 import os
 from hydra import compose, initialize
 from omegaconf import OmegaConf
-from src.train import train_model_simple, QLearner
+from src.train import QLearner
 from src.test import test_model
-#from src.model import SimpleNet, QRoboticTransformer
-#from src.model_qt import QRoboticTransformer as QTAdvanced
-from src.model_repo import QRoboticTransformer
+from src.model import QRoboticTransformer
 
 torch.manual_seed(0)
 
@@ -32,7 +30,6 @@ class Pipeline:
         self.q_learner = QLearner(self.model, self.config)
 
         if self.config["wandb"]["mode"] == "train":
-            #self.q_learner.train_q_transformer()
             self.q_learner.train_model_qlearn_repo()
         if self.config["wandb"]["mode"] == "test":
             if self.config.test.load_model:
