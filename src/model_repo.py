@@ -576,12 +576,6 @@ class QHeadMultipleActions(Module):
         prob_random_action: float = 0.5,
         **kwargs
     ):
-        assert 0. <= prob_random_action <= 1.
-        batch = encoded_state.shape[0]
-
-        if prob_random_action == 1:
-            return self.get_random_actions(batch)
-
         sos_token = reduce(encoded_state, 'b ... d -> b 1 d', 'mean')
         tokens = self.maybe_append_actions(sos_token, actions = actions)
 
@@ -603,18 +597,6 @@ class QHeadMultipleActions(Module):
             q_values = einsum('b d, a d -> b a', last_embed, bin_embeddings)
 
             selected_action_bins = q_values.argmax(dim = -1)
-
-            if prob_random_action > 0.:
-                random_mask = torch.zeros_like(selected_action_bins).float().uniform_(0., 1.) < prob_random_action
-                random_actions = self.get_random_actions(batch, 1)
-                random_actions = rearrange(random_actions, '... 1 -> ...')
-
-                selected_action_bins = torch.where(
-                    random_mask,
-                    random_actions,
-                    selected_action_bins
-                )
-
 
             next_action_embed = bin_embeddings[selected_action_bins]
 
