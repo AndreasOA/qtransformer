@@ -11,6 +11,7 @@ class MetaworldEnvironment:
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.ml1 = metaworld.ML1(env_name)
         self.env = self.ml1.train_classes[env_name]()
+        self.render = render
         if render:
             self.env.render_mode = "human"
         task = random.choice(self.ml1.train_tasks)
@@ -26,7 +27,8 @@ class MetaworldEnvironment:
         if torch.is_tensor(action):
             action = action.cpu().numpy()
         next_state, reward, done, truncated, _ = self.env.step(action)
-        self.env.render()
+        if self.render:
+            self.env.render()
         return torch.tensor(reward, device=self.device, dtype=torch.float32), \
                torch.tensor(next_state, device=self.device, dtype=torch.float32), \
                torch.tensor(done, device=self.device, dtype=torch.bool), \
