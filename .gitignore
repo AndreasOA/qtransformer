@@ -1,9 +1,0 @@
-# Folder
-data/
-outputs/
-wandb/
-__pycache__/
-.vscode/
-
-# Files
-*.pth
