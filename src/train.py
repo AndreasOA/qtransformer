@@ -3,8 +3,10 @@ import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 import random
+import os
 from functools import partial
 from contextlib import nullcontext
+from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
 from src.model import SimpleNet, QRoboticTransformer
 from src.data_loader import get_dataloader
 import wandb
@@ -12,6 +14,7 @@ from ema_pytorch import EMA
 from einops import rearrange, pack
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
+from src.test import test_model
 
 
 def select_q_values(t, indices):
@@ -30,12 +33,17 @@ class QLearner:
     def __init__(self, model, cfg):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.cfg = cfg
-        self.dataloader = get_dataloader(cfg.train.file,
+        if cfg.train.train_single_task:
+            self.files = [cfg.train.folder_path + cfg.train.file_name]
+        else:
+            self.files = [os.path.join(cfg.train.folder_path, f) for f in os.listdir(cfg.train.folder_path) if f.endswith('.npz')][:cfg.train.num_files]
+        self.dataloader = get_dataloader(self.files,
                                          cfg.train.batch_size, 
                                          cfg.train.discount_factor_gamma,
                                          cfg.train.context_length,
                                          cfg.train.shuffle, 
-                                         cfg.train.binary_reward
+                                         cfg.train.binary_reward,
+                                         cfg.train.rescale_reward
                                         )
         self.epochs = cfg.train.epochs
         self.save_path = cfg.train.model_path
@@ -49,6 +57,23 @@ class QLearner:
         self.monte_carlo_return = cfg.train.monte_carlo_return
         self.grad_accum_every = cfg.train.grad_accum_every
         self.accelerator = Accelerator(kwargs_handlers = [DistributedDataParallelKwargs(find_unused_parameters = True)])
+        self.initial_lr = cfg.model.learning_rate
+        self.num_steps = len(self.dataloader) * self.epochs
+        self.scheduler = self.init_scheduler()
+
+    def init_scheduler(self):
+        # Warm-up for the first 1000 steps, then cosine annealing
+        warmup_steps = 1000
+        scheduler = LambdaLR(self.optimizer, lr_lambda=lambda step: min((step + 1) / warmup_steps, 1.0))
+        cosine_scheduler = CosineAnnealingLR(self.optimizer, T_max=self.num_steps)
+        
+        def combined_scheduler(step):
+            if step < warmup_steps:
+                scheduler.step()
+            else:
+                cosine_scheduler.step()
+        
+        return combined_scheduler
 
 
     def init_ema_model(self):
@@ -104,6 +129,7 @@ class QLearner:
 
         q_pred_rest_actions, q_pred_last_action      = q_pred[:, :-1], q_pred[:, -1]
         q_target_first_action, q_target_rest_actions = q_target[:, 0], q_target[:, 1:]
+        #q_target_rest_actions = torch.max(q_target_rest_actions, rewards)
 
         losses_all_actions_but_last = F.mse_loss(q_pred_rest_actions, q_target_rest_actions, reduction = 'none')
 
@@ -111,6 +137,7 @@ class QLearner:
         #q_target_last_action, _ = pack([q_target_first_action, q_next], 'b *')
 
         q_target_last_action = rewards.squeeze() + self.discount_factor_gamma * q_next[:, 0]
+        #q_target_last_action = torch.max(q_target_last_action, rewards)
 
         losses_last_action = F.mse_loss(q_pred_last_action, q_target_last_action, reduction = 'none')
 
@@ -146,47 +173,50 @@ class QLearner:
         return loss, (td_loss, conservative_reg_loss)
 
 
-    def train_model_qlearn(self):
-        self.model.train()
-        self.ema_model.train()
-        if self.cfg.wandb.use_wandb:
-            wandb.watch(self.model, self.ema_model, log="all", log_freq=10)
+    # def train_model_qlearn(self):
+    #     self.model.train()
+    #     self.ema_model.train()
+    #     if self.cfg.wandb.use_wandb:
+    #         wandb.watch(self.model, self.ema_model, log="all", log_freq=10)
 
-        for epoch in range(self.cfg.train.epochs):
-            for i, (states, actions, rewards, next_states, dones) in enumerate(self.dataloader):    
-                states = states.to(self.device)
-                actions = actions.to(self.device)
-                rewards = rewards.to(self.device)
-                next_states = next_states.to(self.device)
-                dones = dones.to(self.device)
-                # zero grads
-                self.optimizer.zero_grad()
-                # main q-learning algorithm
-                with torch.no_grad():
-                    actions = self.model.discretize_actions(actions)
-                    #actions = actions[:, -1]
-                loss, (td_loss, conservative_reg_loss) = self.learn(states, actions, rewards, next_states, dones)
-                loss.backward()
+    #     for epoch in range(self.cfg.train.epochs):
+    #         for i, (states, actions, rewards, next_states, dones) in enumerate(self.dataloader):    
+    #             states = states.to(self.device)
+    #             actions = actions.to(self.device)
+    #             rewards = rewards.to(self.device)
+    #             next_states = next_states.to(self.device)
+    #             dones = dones.to(self.device)
+    #             # zero grads
+    #             self.optimizer.zero_grad()
+    #             # main q-learning algorithm
+    #             with torch.no_grad():
+    #                 actions = self.model.discretize_actions(actions)
+    #                 #actions = actions[:, -1]
+    #             loss, (td_loss, conservative_reg_loss) = self.learn(states, actions, rewards, next_states, dones)
+    #             loss.backward()
 
-                # clip gradients (transformer best practices)
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+    #             # clip gradients (transformer best practices)
+    #             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
-                # take optimizer step
-                self.optimizer.step()
+    #             # take optimizer step
+    #             self.optimizer.step()
 
-                # update target ema
-                self.ema_model.update()
+    #             # update target ema
+    #             self.ema_model.update()
 
 
-                if (i+1) % 100 == 0:  # Print every 100 batches
-                    print(f'Epoch [{epoch+1}/{self.cfg.train.epochs}], Step [{i+1}/{len(self.dataloader)}], TDLoss: {td_loss.item():.4f} Conservative Loss: {conservative_reg_loss.item():.4f}')
-                if self.cfg.wandb.use_wandb:
-                    wandb.log({"epoch": epoch, "loss": loss,"td loss": td_loss.item(), "conservative reg loss": conservative_reg_loss.item()})
+    #             if (i+1) % 100 == 0:  # Print every 100 batches
+    #                 print(f'Epoch [{epoch+1}/{self.cfg.train.epochs}], Step [{i+1}/{len(self.dataloader)}], TDLoss: {td_loss.item():.4f} Conservative Loss: {conservative_reg_loss.item():.4f}')
+    #             if self.cfg.wandb.use_wandb:
+    #                 wandb.log({"epoch": epoch, "loss": loss,"td loss": td_loss.item(), "conservative reg loss": conservative_reg_loss.item()})
 
-        if self.cfg.train.save_model:
-            self.save_model()
+    #             if self.cfg.train.save_model and (i + 1) % 200 == 0:
+    #                 self.save_model(f"trafo_cp_{epoch}_{i}.pth")
 
-        print('training complete')
+    #     if self.cfg.train.save_model:
+    #         self.save_model()
+
+    #     print('training complete')
 
 
     def train_model_qlearn_repo(self):
@@ -239,12 +269,16 @@ class QLearner:
 
                 self.ema_model.update()
 
-                # whether to checkpoint or not
-
                 self.wait()
+                self.scheduler(i + len(self.dataloader)*epoch)
 
-            if self.cfg.train.save_model:
-                self.save_model(f"trafo_cp_{epoch}.pth")
+                if self.cfg.train.save_model and (i + 1) % 200 == 0:
+                    file_reward = []
+                    for file in self.files:
+                        file = file.split("/")[1].split(".")[0]
+                        file_reward.append(test_model(self.cfg, self.model, mode="train", env_name=file))
+                    self.model.train()
+                    self.save_model(f"trafo_cp_{epoch}_{i}_{torch.tensor(file_reward).mean():.3f}.pth")
 
         if self.cfg.train.save_model:
             self.save_model()
